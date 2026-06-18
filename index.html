@@ -1004,14 +1004,18 @@
 
     .btn-back-sm {
       background: transparent;
-      color: var(--c-muted);
-      border: 1px solid var(--c-border);
+      color: #fca5a5;
+      border: 1px solid rgba(239,68,68,0.4);
       font-size: 0.85rem;
       padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
     }
     .btn-back-sm:hover {
-      background: var(--c-surface2);
-      color: var(--c-text);
+      background: rgba(239,68,68,0.15);
+      color: #fef2f2;
+      border-color: rgba(239,68,68,0.6);
     }
 
     .hidden {
@@ -1328,14 +1332,11 @@
     <header class="game-header">
       <div class="header-logo" aria-label="Ya!">Ya!</div>
 
-      <div class="header-room" id="room-code-btn" role="button" tabindex="0"
-           aria-label="Copiar enlace de invitación" title="Clic para copiar enlace">
-        <div>
-          <div class="room-label">Sala</div>
-          <div class="room-code" id="room-code-display">──────</div>
-        </div>
-        <span class="room-copy">📋</span>
-      </div>
+      <button class="header-room" id="room-code-btn" type="button"
+           aria-label="Copiar enlace de invitación" title="Clic para copiar enlace" style="justify-content: center; font-size: 0.95rem;">
+        <span style="font-size: 1rem; color: var(--c-accent2);">🔗</span>
+        <span style="font-weight: 700; color: var(--c-accent2); letter-spacing: 0.05em;">Invitar</span>
+      </button>
 
       <div class="header-user">
         <span id="user-emoji">😀</span> <span id="user-display">—</span>
@@ -1381,7 +1382,11 @@
 
       <!-- Users panel (right) -->
       <aside class="right-panel" aria-label="Usuarios conectados">
-        <div class="right-panel-content">
+        <div style="padding: 16px 20px 0; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 0.7rem; color: var(--c-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;">Código de Sala</span>
+          <span id="room-code-display" style="font-size: 1.25rem; font-weight: 800; color: var(--c-accent2); letter-spacing: 0.12em; line-height: 1;">──────</span>
+        </div>
+        <div class="right-panel-content" style="padding-top: 12px;">
           <div class="panel-header">
             <h2 class="panel-title">Jugadores (<span id="users-count">0</span>)</h2>
             <div class="ranking-dot" title="En vivo"></div>
