@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ya! — ¿Quién presiona primero?</title>
+  <meta name="description" content="Compite con tus amigos en tiempo real. Presiona el botón ¡YA! antes que nadie y descubre quién reacciona más rápido." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Firebase SDK (CDN) -->
+  <script type="module">
+    // ╔══════════════════════════════════════════════════════════════════╗
+    // ║          CONFIGURACIÓN DE FIREBASE — REEMPLAZA ESTOS VALORES    ║
+    // ║                                                                  ║
+    // ║  1. Ve a https://console.firebase.google.com                    ║
+    // ║  2. Crea un proyecto (o usa uno existente)                      ║
+    // ║  3. Agrega una app web y copia la config aquí abajo             ║
+    // ║  4. En "Realtime Database" → Reglas, habilita lectura/escritura ║
+    // ╚══════════════════════════════════════════════════════════════════╝
+    const firebaseConfig = {
+      apiKey:            "AIzaSyA50juVponPEalw3kKWTr4EAcpXIutVLD0",
+      authDomain:        "ya-devlusaja-com.firebaseapp.com",
+      databaseURL:       "https://ya-devlusaja-com-default-rtdb.firebaseio.com",
+      projectId:         "ya-devlusaja-com",
+      storageBucket:     "ya-devlusaja-com.firebasestorage.app",
+      messagingSenderId: "845632791126",
+      appId:             "1:845632791126:web:31c224455dba871d87d1f7"
+    };
+    // ════════════════════════════════════════════════════════════════════
+
+    import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, push, set, onValue,
+             remove, serverTimestamp, get }          from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    // ─── Estado global ───────────────────────────────────────────────
+    let app, db;
+    let currentRoom   = null;
+    let currentUser   = null;
+    let hasPressed    = false;
+    let rankingUnsub  = null;  // función para desuscribirse del listener
+    let roomStartTime = null;  // serverTimestamp del primer clic (referencia)
+
+    // ─── Init Firebase ───────────────────────────────────────────────
+    function initFirebase() {
+      app = initializeApp(firebaseConfig);
+      db  = getDatabase(app);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────
+    function generateRoomCode() {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      return Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    }
+
+    function formatDelta(ms) {
+      if (ms === 0) return "🥇 Primero";
+      if (ms < 1000) return `+${ms} ms`;
+      return `+${(ms / 1000).toFixed(2)} s`;
+    }
+
+    function medal(pos) {
+      return ["🥇", "🥈", "🥉"][pos] ?? `${pos + 1}°`;
+    }
+
+    // ─── Pantalla de Entrada ─────────────────────────────────────────
+    function showLobby() {
+      document.getElementById("screen-lobby").style.display = "flex";
+      document.getElementById("screen-game").style.display  = "none";
+      if (rankingUnsub) { rankingUnsub(); rankingUnsub = null; }
+    }
+
+    function showGame(roomCode, userName) {
+      document.getElementById("screen-lobby").style.display = "none";
+      document.getElementById("screen-game").style.display  = "flex";
+      document.getElementById("room-code-display").textContent = roomCode;
+      document.getElementById("user-display").textContent = userName;
+      hasPressed   = false;
+      roomStartTime = null;
+      resetYaButton();
+      subscribeRanking(roomCode);
+    }
+
+    // ─── Botón ¡YA! ──────────────────────────────────────────────────
+    function resetYaButton() {
+      const btn = document.getElementById("ya-btn");
+      btn.disabled = false;
+      btn.classList.remove("pressed");
+      btn.querySelector(".ya-label").textContent = "¡YA!";
+    }
+
+    function disableYaButton() {
+      const btn = document.getElementById("ya-btn");
+      btn.disabled = true;
+      btn.classList.add("pressed");
+      btn.querySelector(".ya-label").textContent = "✓ Enviado";
+    }
+
+    // ─── Registro de clic en Firebase ────────────────────────────────
+    async function registerClick() {
+      if (hasPressed || !currentRoom || !currentUser) return;
+      hasPressed = true;
+      disableYaButton();
+
+      // Animar el botón con feedback visual
+      const ripple = document.getElementById("ya-ripple");
+      ripple.classList.add("animate");
+      setTimeout(() => ripple.classList.remove("animate"), 600);
+
+      const clicksRef = ref(db, `rooms/${currentRoom}/clicks`);
+      const newClick  = push(clicksRef);
+      await set(newClick, {
+        user:      currentUser,
+        timestamp: serverTimestamp()
+      });
+    }
+
+    // ─── Ranking en tiempo real ───────────────────────────────────────
+    function subscribeRanking(roomCode) {
+      if (rankingUnsub) rankingUnsub();
+
+      const clicksRef = ref(db, `rooms/${roomCode}/clicks`);
+      rankingUnsub = onValue(clicksRef, (snapshot) => {
+        const data = snapshot.val();
+        const container = document.getElementById("ranking-list");
+
+        if (!data) {
+          container.innerHTML = `
+            <div class="ranking-empty">
+              <span class="ranking-empty-icon">⏳</span>
+              <p>Esperando participantes…</p>
+            </div>`;
+          return;
+        }
+
+        // Convertir a array y ordenar por timestamp
+        const entries = Object.values(data)
+          .filter(e => e.timestamp !== null)
+          .sort((a, b) => a.timestamp - b.timestamp);
+
+        if (entries.length === 0) {
+          container.innerHTML = `
+            <div class="ranking-empty">
+              <span class="ranking-empty-icon">⏳</span>
+              <p>Esperando participantes…</p>
+            </div>`;
+          return;
+        }
+
+        const firstTs = entries[0].timestamp;
+
+        container.innerHTML = entries.map((entry, i) => {
+          const delta = entry.timestamp - firstTs;
+          const isMe  = entry.user === currentUser;
+          return `
+            <div class="ranking-row ${isMe ? "ranking-row--me" : ""}" style="animation-delay:${i * 60}ms">
+              <span class="rank-medal">${medal(i)}</span>
+              <span class="rank-name">${escapeHtml(entry.user)}${isMe ? " <span class='you-badge'>tú</span>" : ""}</span>
+              <span class="rank-time">${formatDelta(delta)}</span>
+            </div>`;
+        }).join("");
+      });
+    }
+
+    // ─── Reiniciar sala ───────────────────────────────────────────────
+    async function resetRoom() {
+      if (!currentRoom) return;
+      const clicksRef = ref(db, `rooms/${currentRoom}/clicks`);
+      await remove(clicksRef);
+      hasPressed    = false;
+      roomStartTime = null;
+      resetYaButton();
+
+      // Feedback visual
+      showToast("¡Sala reiniciada! Nueva ronda 🚀");
+    }
+
+    // ─── Toast notification ───────────────────────────────────────────
+    function showToast(msg) {
+      const toast = document.getElementById("toast");
+      toast.textContent = msg;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 3000);
+    }
+
+    // ─── Escape HTML ──────────────────────────────────────────────────
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    // ─── Copiar código de sala ────────────────────────────────────────
+    async function copyRoomCode() {
+      try {
+        await navigator.clipboard.writeText(currentRoom);
+        showToast("Código copiado al portapapeles 📋");
+      } catch {
+        showToast(`Código de sala: ${currentRoom}`);
+      }
+    }
+
+    // ─── DOM Ready ────────────────────────────────────────────────────
+    document.addEventListener("DOMContentLoaded", () => {
+      initFirebase();
+
+      // ── Lobby events ──
+      document.getElementById("btn-new-room").addEventListener("click", () => {
+        document.getElementById("input-room").value = generateRoomCode();
+      });
+
+      document.getElementById("btn-enter").addEventListener("click", async () => {
+        const name = document.getElementById("input-name").value.trim();
+        const room = document.getElementById("input-room").value.trim().toUpperCase();
+
+        if (!name) { showToast("Por favor ingresa tu nombre 👤"); return; }
+        if (!room)  { showToast("Ingresa o genera un código de sala 🏠"); return; }
+
+        currentUser = name;
+        currentRoom = room;
+        showGame(room, name);
+      });
+
+      // ── Game events ──
+      document.getElementById("ya-btn").addEventListener("click", registerClick);
+      document.getElementById("btn-reset").addEventListener("click", resetRoom);
+      document.getElementById("btn-back").addEventListener("click", () => {
+        if (rankingUnsub) { rankingUnsub(); rankingUnsub = null; }
+        currentRoom  = null;
+        currentUser  = null;
+        showLobby();
+      });
+      document.getElementById("room-code-display").addEventListener("click", copyRoomCode);
+
+      // Accesibilidad: Enter en los campos
+      document.getElementById("input-name").addEventListener("keydown", e => {
+        if (e.key === "Enter") document.getElementById("input-room").focus();
+      });
+      document.getElementById("input-room").addEventListener("keydown", e => {
+        if (e.key === "Enter") document.getElementById("btn-enter").click();
+      });
+    });
+  </script>
+
+  <style>
+    /* ══════════════════════════════════════════
+       TOKENS & BASE
+    ══════════════════════════════════════════ */
+    :root {
+      --c-bg:          #0d0d14;
+      --c-surface:     #16162a;
+      --c-surface2:    #1e1e38;
+      --c-border:      rgba(255,255,255,0.07);
+      --c-accent:      #7c3aed;
+      --c-accent-glow: rgba(124,58,237,0.45);
+      --c-accent2:     #06b6d4;
+      --c-ya:          #f59e0b;
+      --c-ya-pressed:  #374151;
+      --c-ya-glow:     rgba(245,158,11,0.5);
+      --c-text:        #f1f5f9;
+      --c-muted:       #94a3b8;
+      --c-gold:        #fbbf24;
+      --c-silver:      #94a3b8;
+      --c-bronze:      #d97706;
+      --radius:        16px;
+      --radius-lg:     24px;
+      --transition:    0.25s cubic-bezier(0.4,0,0.2,1);
+      font-family: "Outfit", system-ui, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--c-bg);
+      color: var(--c-text);
+      overflow-x: hidden;
+    }
+
+    body {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124,58,237,0.18) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 80% 110%, rgba(6,182,212,0.10) 0%, transparent 60%);
+      min-height: 100dvh;
+    }
+
+    /* ══════════════════════════════════════════
+       SCREENS
+    ══════════════════════════════════════════ */
+    .screen {
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      gap: 0;
+    }
+
+    /* ══════════════════════════════════════════
+       LOBBY SCREEN
+    ══════════════════════════════════════════ */
+    #screen-lobby {
+      gap: 0;
+    }
+
+    .lobby-logo {
+      font-size: clamp(5rem, 18vw, 10rem);
+      font-weight: 900;
+      line-height: 1;
+      background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 40%, #06b6d4 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      filter: drop-shadow(0 0 40px rgba(245,158,11,0.4));
+      letter-spacing: -4px;
+      user-select: none;
+      animation: pulse-logo 3s ease-in-out infinite;
+    }
+
+    @keyframes pulse-logo {
+      0%, 100% { filter: drop-shadow(0 0 40px rgba(245,158,11,0.4)); }
+      50%       { filter: drop-shadow(0 0 70px rgba(245,158,11,0.7)); }
+    }
+
+    .lobby-tagline {
+      margin-top: 8px;
+      font-size: clamp(0.9rem, 2.5vw, 1.1rem);
+      color: var(--c-muted);
+      font-weight: 400;
+      letter-spacing: 0.02em;
+      margin-bottom: 48px;
+    }
+
+    .lobby-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius-lg);
+      padding: 36px 32px;
+      backdrop-filter: blur(20px);
+      box-shadow:
+        0 0 0 1px rgba(124,58,237,0.1),
+        0 24px 60px rgba(0,0,0,0.5);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--c-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .form-input {
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-size: 1rem;
+      font-family: inherit;
+      font-weight: 600;
+      color: var(--c-text);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      width: 100%;
+      letter-spacing: 0.02em;
+    }
+
+    .form-input::placeholder { color: var(--c-muted); font-weight: 400; }
+
+    .form-input:focus {
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px var(--c-accent-glow);
+    }
+
+    .room-row {
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .room-row .form-input {
+      flex: 1;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 20px;
+      border: none;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition), opacity var(--transition);
+      white-space: nowrap;
+      letter-spacing: 0.02em;
+      user-select: none;
+    }
+
+    .btn:active { transform: scale(0.96); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+    .btn-ghost {
+      background: var(--c-surface2);
+      color: var(--c-muted);
+      border: 1px solid var(--c-border);
+    }
+    .btn-ghost:hover:not(:disabled) {
+      background: rgba(124,58,237,0.15);
+      color: var(--c-text);
+      border-color: rgba(124,58,237,0.4);
+    }
+
+    .btn-accent {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.4);
+    }
+    .btn-accent:hover:not(:disabled) {
+      box-shadow: 0 6px 30px rgba(124,58,237,0.6);
+      transform: translateY(-2px);
+    }
+
+    .btn-enter {
+      width: 100%;
+      padding: 16px;
+      font-size: 1rem;
+      margin-top: 8px;
+      background: linear-gradient(135deg, var(--c-ya), #f97316);
+      color: #0d0d14;
+      box-shadow: 0 4px 20px var(--c-ya-glow);
+    }
+    .btn-enter:hover {
+      box-shadow: 0 8px 35px var(--c-ya-glow);
+      transform: translateY(-2px);
+    }
+
+    /* ══════════════════════════════════════════
+       GAME SCREEN
+    ══════════════════════════════════════════ */
+    #screen-game {
+      display: none;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      padding: 0;
+      gap: 0;
+      min-height: 100dvh;
+    }
+
+    /* Header */
+    .game-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: rgba(22,22,42,0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--c-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      gap: 12px;
+    }
+
+    .header-logo {
+      font-size: 1.8rem;
+      font-weight: 900;
+      background: linear-gradient(135deg, #f59e0b, #06b6d4);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -1px;
+      flex-shrink: 0;
+    }
+
+    .header-room {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 8px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: border-color var(--transition), background var(--transition);
+      flex: 1;
+      max-width: 240px;
+    }
+    .header-room:hover {
+      border-color: rgba(124,58,237,0.5);
+      background: rgba(124,58,237,0.1);
+    }
+
+    .room-label { font-size: 0.7rem; color: var(--c-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+    .room-code  { font-size: 1rem; font-weight: 700; letter-spacing: 0.12em; color: var(--c-accent2); }
+    .room-copy  { font-size: 0.8rem; margin-left: auto; color: var(--c-muted); }
+
+    .header-user {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--c-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .header-user span { color: var(--c-text); }
+
+    /* Main game layout */
+    .game-main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 0;
+      min-height: 0;
+    }
+
+    @media (max-width: 768px) {
+      .game-main { grid-template-columns: 1fr; }
+    }
+
+    /* YA button area */
+    .ya-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+      gap: 32px;
+    }
+
+    .ya-instruction {
+      font-size: clamp(0.85rem, 2vw, 1rem);
+      color: var(--c-muted);
+      text-align: center;
+      font-weight: 400;
+    }
+
+    /* THE BIG BUTTON */
+    .ya-btn-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #ya-ripple {
+      position: absolute;
+      inset: -20px;
+      border-radius: 50%;
+      border: 3px solid var(--c-ya);
+      opacity: 0;
+      pointer-events: none;
+    }
+    #ya-ripple.animate {
+      animation: ripple-out 0.6s ease-out forwards;
+    }
+    @keyframes ripple-out {
+      0%   { transform: scale(0.9); opacity: 0.8; }
+      100% { transform: scale(1.5); opacity: 0; }
+    }
+
+    #ya-btn {
+      width: clamp(200px, 38vw, 300px);
+      height: clamp(200px, 38vw, 300px);
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      background: radial-gradient(circle at 35% 35%, #fde68a, var(--c-ya) 60%, #b45309);
+      color: #0d0d14;
+      font-family: inherit;
+      font-size: clamp(2.5rem, 7vw, 4rem);
+      font-weight: 900;
+      letter-spacing: -1px;
+      position: relative;
+      overflow: hidden;
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition), filter var(--transition);
+      box-shadow:
+        0 0 0 8px rgba(245,158,11,0.15),
+        0 0 40px var(--c-ya-glow),
+        0 20px 60px rgba(0,0,0,0.5),
+        inset 0 2px 0 rgba(255,255,255,0.3);
+      animation: ya-breathe 2.5s ease-in-out infinite;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    @keyframes ya-breathe {
+      0%, 100% {
+        box-shadow: 0 0 0 8px rgba(245,158,11,0.15), 0 0 40px var(--c-ya-glow), 0 20px 60px rgba(0,0,0,0.5), inset 0 2px 0 rgba(255,255,255,0.3);
+        transform: scale(1);
+      }
+      50% {
+        box-shadow: 0 0 0 20px rgba(245,158,11,0.08), 0 0 80px rgba(245,158,11,0.6), 0 20px 60px rgba(0,0,0,0.5), inset 0 2px 0 rgba(255,255,255,0.3);
+        transform: scale(1.025);
+      }
+    }
+
+    #ya-btn:hover:not(:disabled) {
+      animation: none;
+      transform: scale(1.06);
+      box-shadow:
+        0 0 0 14px rgba(245,158,11,0.2),
+        0 0 80px rgba(245,158,11,0.7),
+        0 30px 80px rgba(0,0,0,0.5),
+        inset 0 2px 0 rgba(255,255,255,0.4);
+    }
+
+    #ya-btn:active:not(:disabled) {
+      transform: scale(0.94);
+    }
+
+    #ya-btn.pressed {
+      animation: none;
+      background: radial-gradient(circle at 35% 35%, #374151, #1f2937 60%, #111827);
+      cursor: not-allowed;
+      box-shadow:
+        0 0 0 8px rgba(55,65,81,0.2),
+        0 0 20px rgba(0,0,0,0.4),
+        0 10px 30px rgba(0,0,0,0.5),
+        inset 0 2px 0 rgba(255,255,255,0.05);
+      filter: none;
+    }
+
+    #ya-btn::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 25%, rgba(255,255,255,0.25) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .ya-label {
+      position: relative;
+      z-index: 1;
+      display: block;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+
+    .btn-reset-wrap {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn-reset {
+      background: var(--c-surface2);
+      color: var(--c-muted);
+      border: 1px solid var(--c-border);
+      font-size: 0.85rem;
+      padding: 10px 20px;
+    }
+    .btn-reset:hover {
+      background: rgba(239,68,68,0.15);
+      color: #fca5a5;
+      border-color: rgba(239,68,68,0.4);
+    }
+
+    .btn-back-sm {
+      background: transparent;
+      color: var(--c-muted);
+      border: 1px solid var(--c-border);
+      font-size: 0.85rem;
+      padding: 10px 20px;
+    }
+    .btn-back-sm:hover {
+      background: var(--c-surface2);
+      color: var(--c-text);
+    }
+
+    /* ══════════════════════════════════════════
+       RANKING PANEL
+    ══════════════════════════════════════════ */
+    .ranking-panel {
+      background: var(--c-surface);
+      border-left: 1px solid var(--c-border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    @media (max-width: 768px) {
+      .ranking-panel {
+        border-left: none;
+        border-top: 1px solid var(--c-border);
+        max-height: 45vh;
+      }
+    }
+
+    .ranking-header {
+      padding: 20px 24px 14px;
+      border-bottom: 1px solid var(--c-border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .ranking-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--c-muted);
+    }
+
+    .ranking-dot {
+      width: 8px; height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #22c55e;
+      animation: blink 1.4s ease-in-out infinite;
+      margin-left: auto;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .ranking-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--c-surface2) transparent;
+    }
+
+    .ranking-list::-webkit-scrollbar { width: 4px; }
+    .ranking-list::-webkit-scrollbar-track { background: transparent; }
+    .ranking-list::-webkit-scrollbar-thumb { background: var(--c-surface2); border-radius: 4px; }
+
+    .ranking-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 40px 16px;
+      color: var(--c-muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    .ranking-empty-icon { font-size: 2.5rem; }
+
+    .ranking-row {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      font-size: 0.9rem;
+      animation: slide-in 0.3s ease-out both;
+      transition: border-color var(--transition), background var(--transition);
+    }
+
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(20px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .ranking-row--me {
+      border-color: rgba(124,58,237,0.5);
+      background: rgba(124,58,237,0.1);
+      box-shadow: 0 0 0 1px rgba(124,58,237,0.2);
+    }
+
+    .ranking-row:first-child {
+      border-color: rgba(251,191,36,0.4);
+      background: rgba(251,191,36,0.08);
+    }
+
+    .rank-medal { font-size: 1.2rem; text-align: center; }
+
+    .rank-name {
+      font-weight: 600;
+      color: var(--c-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .you-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: rgba(124,58,237,0.3);
+      color: #a78bfa;
+      border: 1px solid rgba(124,58,237,0.4);
+      border-radius: 4px;
+      padding: 1px 5px;
+      letter-spacing: 0.05em;
+      flex-shrink: 0;
+    }
+
+    .rank-time {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--c-accent2);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .ranking-row:first-child .rank-time { color: var(--c-gold); }
+
+    /* ══════════════════════════════════════════
+       TOAST
+    ══════════════════════════════════════════ */
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      backdrop-filter: blur(20px);
+      color: var(--c-text);
+      padding: 12px 24px;
+      border-radius: 100px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      pointer-events: none;
+      z-index: 1000;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      white-space: nowrap;
+      max-width: calc(100vw - 32px);
+      text-align: center;
+    }
+    #toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ══════════════════════════════════════════
+       RESPONSIVE TWEAKS
+    ══════════════════════════════════════════ */
+    @media (max-width: 480px) {
+      .lobby-card { padding: 28px 20px; }
+      .game-header { padding: 12px 16px; }
+      .header-user { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ╔══════════════════════════════════════╗ -->
+  <!-- ║          PANTALLA DE ENTRADA         ║ -->
+  <!-- ╚══════════════════════════════════════╝ -->
+  <div id="screen-lobby" class="screen">
+    <h1 class="lobby-logo">Ya!</h1>
+    <p class="lobby-tagline">¿Quién reacciona más rápido? 🏆</p>
+
+    <div class="lobby-card" role="main">
+      <div class="form-group">
+        <label class="form-label" for="input-name">Tu nombre o apodo</label>
+        <input
+          id="input-name"
+          class="form-input"
+          type="text"
+          placeholder="Ej: Flash ⚡"
+          maxlength="24"
+          autocomplete="nickname"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-room">Código de sala</label>
+        <div class="room-row">
+          <input
+            id="input-room"
+            class="form-input"
+            type="text"
+            placeholder="XYZKW"
+            maxlength="10"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="btn-new-room" class="btn btn-ghost" type="button" title="Generar código aleatorio">
+            🎲 Crear
+          </button>
+        </div>
+      </div>
+
+      <button id="btn-enter" class="btn btn-enter" type="button">
+        Entrar a la Sala →
+      </button>
+    </div>
+  </div>
+
+  <!-- ╔══════════════════════════════════════╗ -->
+  <!-- ║           PANTALLA DE JUEGO          ║ -->
+  <!-- ╚══════════════════════════════════════╝ -->
+  <div id="screen-game" class="screen" role="main">
+
+    <!-- Header -->
+    <header class="game-header">
+      <div class="header-logo" aria-label="Ya!">Ya!</div>
+
+      <div class="header-room" id="room-code-display" role="button" tabindex="0"
+           aria-label="Copiar código de sala" title="Clic para copiar">
+        <div>
+          <div class="room-label">Sala</div>
+          <div class="room-code" id="room-code-display">──────</div>
+        </div>
+        <span class="room-copy">📋</span>
+      </div>
+
+      <div class="header-user">
+        👤 <span id="user-display">—</span>
+      </div>
+    </header>
+
+    <!-- Main layout: button + ranking -->
+    <div class="game-main">
+
+      <!-- YA! button area -->
+      <section class="ya-area">
+        <p class="ya-instruction">Presiona el botón en cuanto estés listo.<br>¡El más rápido gana! ⚡</p>
+
+        <div class="ya-btn-wrapper">
+          <div id="ya-ripple"></div>
+          <button id="ya-btn" type="button" aria-label="Presionar Ya">
+            <span class="ya-label">¡YA!</span>
+          </button>
+        </div>
+
+        <div class="btn-reset-wrap">
+          <button id="btn-reset" class="btn btn-reset" type="button">
+            🔄 Reiniciar Sala
+          </button>
+          <button id="btn-back" class="btn btn-back-sm" type="button">
+            ← Salir
+          </button>
+        </div>
+      </section>
+
+      <!-- Ranking panel -->
+      <aside class="ranking-panel" aria-label="Ranking de velocidad">
+        <div class="ranking-header">
+          <h2 class="ranking-title">Ranking de velocidad</h2>
+          <div class="ranking-dot" title="En vivo"></div>
+        </div>
+        <div id="ranking-list" class="ranking-list">
+          <div class="ranking-empty">
+            <span class="ranking-empty-icon">⏳</span>
+            <p>Esperando participantes…</p>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+</body>
+</html>
