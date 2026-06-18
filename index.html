@@ -362,8 +362,9 @@
     // ─── Copiar código de sala ────────────────────────────────────────
     async function copyRoomCode() {
       try {
-        await navigator.clipboard.writeText(currentRoom);
-        showToast("Código copiado al portapapeles 📋");
+        const link = `${window.location.origin}${window.location.pathname}?room=${currentRoom}`;
+        await navigator.clipboard.writeText(link);
+        showToast("Enlace de invitación copiado 📋");
       } catch {
         showToast(`Código de sala: ${currentRoom}`);
       }
@@ -372,6 +373,14 @@
     // ─── DOM Ready ────────────────────────────────────────────────────
     document.addEventListener("DOMContentLoaded", () => {
       initFirebase();
+
+      // ── Parámetros de URL ──
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        document.getElementById("input-room").value = roomParam.toUpperCase();
+        document.getElementById("input-name").focus();
+      }
 
       // ── Emoji picker ──
       const emojis = ["😀", "😎", "👾", "🦊", "🚀", "🦄", "👻", "🤠", "🤖", "🐱", "🐶", "🦁", "🐯", "🐼", "🐨", "🐸"];
@@ -447,9 +456,13 @@
         currentRoom  = null;
         currentUser  = null;
         currentUserId = null;
+        
+        // Limpiar URL al salir
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
         showLobby();
       });
-      document.getElementById("room-code-display").addEventListener("click", copyRoomCode);
+      document.getElementById("room-code-btn").addEventListener("click", copyRoomCode);
 
       // Accesibilidad: Enter en los campos
       document.getElementById("input-name").addEventListener("keydown", e => {
@@ -1315,8 +1328,8 @@
     <header class="game-header">
       <div class="header-logo" aria-label="Ya!">Ya!</div>
 
-      <div class="header-room" id="room-code-display" role="button" tabindex="0"
-           aria-label="Copiar código de sala" title="Clic para copiar">
+      <div class="header-room" id="room-code-btn" role="button" tabindex="0"
+           aria-label="Copiar enlace de invitación" title="Clic para copiar enlace">
         <div>
           <div class="room-label">Sala</div>
           <div class="room-code" id="room-code-display">──────</div>
