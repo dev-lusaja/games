@@ -47,11 +47,21 @@
     let rankingUnsub  = null;
     let roomStateUnsub = null;
     let usersUnsub    = null;
+    let serverTimeOffset = 0;
 
     // ─── Init Firebase ───────────────────────────────────────────────
     function initFirebase() {
       app = initializeApp(firebaseConfig);
       db  = getDatabase(app);
+
+      const offsetRef = ref(db, ".info/serverTimeOffset");
+      onValue(offsetRef, (snap) => {
+        serverTimeOffset = snap.val() || 0;
+      });
+    }
+
+    function getServerTime() {
+      return Date.now() + serverTimeOffset;
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────
@@ -100,7 +110,7 @@
         isAdmin = true;
         onDisconnect(roomRef).remove(); // Si el admin se va, se borra la sala
         await set(ref(db, `rooms/${roomCode}/admin`), currentUserId);
-        await set(ref(db, `rooms/${roomCode}/state`), "waiting");
+        await set(ref(db, `rooms/${roomCode}/state`), { status: "waiting" });
       } else {
         isAdmin = false;
       }
@@ -165,14 +175,16 @@
       
       const stateRef = ref(db, `rooms/${roomCode}/state`);
       roomStateUnsub = onValue(stateRef, (snapshot) => {
-        const state = snapshot.val();
+        const stateData = snapshot.val();
         
         // Si el estado es null y no eres admin, significa que la sala fue eliminada
-        if (state === null && !isAdmin && currentUser) {
+        if (stateData === null && !isAdmin && currentUser) {
           showToast("El administrador cerró la sala.");
           document.getElementById("btn-back").click();
           return;
         }
+
+        const status = typeof stateData === 'string' ? stateData : (stateData?.status || "waiting");
 
         const instr = document.getElementById("ya-instruction");
         const btnStart = document.getElementById("btn-start-round");
@@ -181,7 +193,12 @@
         const podiumArea = document.getElementById("podium-area");
         const btnReset = document.getElementById("btn-reset");
 
-        if (state === "waiting") {
+        if (window.countdownInterval) {
+          clearInterval(window.countdownInterval);
+          window.countdownInterval = null;
+        }
+
+        if (status === "waiting") {
           hasPressed = false;
           resetYaButton();
           btnYaWrap.classList.add("hidden");
@@ -197,7 +214,7 @@
             btnStart.classList.add("hidden");
             btnReset.classList.add("hidden");
           }
-        } else if (state === "countdown") {
+        } else if (status === "countdown") {
           instr.textContent = "¡Prepárate!";
           btnStart.classList.add("hidden");
           btnReset.classList.add("hidden");
@@ -205,28 +222,36 @@
           podiumArea.classList.add("hidden");
           countdownDisplay.classList.remove("hidden");
           
-          let count = 3;
-          countdownDisplay.textContent = count;
-          
-          // Re-iniciar animación (hack para CSS)
-          countdownDisplay.style.animation = 'none';
-          countdownDisplay.offsetHeight; 
-          countdownDisplay.style.animation = null;
+          const targetTime = stateData.targetTime || (getServerTime() + 3000);
+          let lastCount = -1;
 
-          const interval = setInterval(() => {
-            count--;
-            if (count > 0) {
-              countdownDisplay.textContent = count;
-              countdownDisplay.style.animation = 'none';
-              countdownDisplay.offsetHeight;
-              countdownDisplay.style.animation = null;
-            } else {
-              clearInterval(interval);
+          window.countdownInterval = setInterval(() => {
+            const remaining = targetTime - getServerTime();
+            if (remaining <= 0) {
+              clearInterval(window.countdownInterval);
               countdownDisplay.classList.add("hidden");
               btnYaWrap.classList.remove("hidden");
               instr.textContent = "¡Presiona YA!";
+            } else {
+              const secondsLeft = Math.ceil(remaining / 1000);
+              const displayText = secondsLeft > 3 ? "¡Listos!" : secondsLeft;
+
+              if (displayText !== lastCount) {
+                lastCount = displayText;
+                
+                countdownDisplay.textContent = displayText;
+                if (secondsLeft > 3) {
+                  countdownDisplay.style.fontSize = '3rem';
+                } else {
+                  countdownDisplay.style.fontSize = '8rem';
+                }
+
+                countdownDisplay.style.animation = 'none';
+                countdownDisplay.offsetHeight;
+                countdownDisplay.style.animation = null;
+              }
             }
-          }, 1000);
+          }, 50); // Chequeo rápido de 50ms para máxima precisión
         }
       });
     }
@@ -312,7 +337,7 @@
       await remove(clicksRef);
       
       const stateRef = ref(db, `rooms/${currentRoom}/state`);
-      await set(stateRef, "waiting");
+      await set(stateRef, { status: "waiting" });
       
       showToast("¡Sala reiniciada! 🚀");
     }
@@ -403,7 +428,10 @@
       document.getElementById("btn-start-round").addEventListener("click", async () => {
         if (!isAdmin || !currentRoom) return;
         const stateRef = ref(db, `rooms/${currentRoom}/state`);
-        await set(stateRef, "countdown");
+        await set(stateRef, {
+          status: "countdown",
+          targetTime: getServerTime() + 4000 // 4 segundos en el futuro (1s para "¡Listos!" + 3s de cuenta)
+        });
       });
 
       document.getElementById("ya-btn").addEventListener("click", registerClick);
