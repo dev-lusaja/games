@@ -40,6 +40,7 @@
     let app, db;
     let currentRoom   = null;
     let currentUser   = null;
+    let currentEmoji  = "😀";
     let hasPressed    = false;
     let rankingUnsub  = null;  // función para desuscribirse del listener
     let roomStartTime = null;  // serverTimestamp del primer clic (referencia)
@@ -73,11 +74,12 @@
       if (rankingUnsub) { rankingUnsub(); rankingUnsub = null; }
     }
 
-    function showGame(roomCode, userName) {
+    function showGame(roomCode, userName, emoji) {
       document.getElementById("screen-lobby").style.display = "none";
       document.getElementById("screen-game").style.display  = "flex";
       document.getElementById("room-code-display").textContent = roomCode;
       document.getElementById("user-display").textContent = userName;
+      document.getElementById("user-emoji").textContent = emoji;
       hasPressed   = false;
       roomStartTime = null;
       resetYaButton();
@@ -114,6 +116,7 @@
       const newClick  = push(clicksRef);
       await set(newClick, {
         user:      currentUser,
+        emoji:     currentEmoji,
         timestamp: serverTimestamp()
       });
     }
@@ -158,7 +161,7 @@
           return `
             <div class="ranking-row ${isMe ? "ranking-row--me" : ""}" style="animation-delay:${i * 60}ms">
               <span class="rank-medal">${medal(i)}</span>
-              <span class="rank-name">${escapeHtml(entry.user)}${isMe ? " <span class='you-badge'>tú</span>" : ""}</span>
+              <span class="rank-name"><span class="rank-emoji">${escapeHtml(entry.emoji || "😀")}</span> ${escapeHtml(entry.user)}${isMe ? " <span class='you-badge'>tú</span>" : ""}</span>
               <span class="rank-time">${formatDelta(delta)}</span>
             </div>`;
         }).join("");
@@ -209,21 +212,55 @@
     document.addEventListener("DOMContentLoaded", () => {
       initFirebase();
 
-      // ── Lobby events ──
-      document.getElementById("btn-new-room").addEventListener("click", () => {
-        document.getElementById("input-room").value = generateRoomCode();
+      // ── Emoji picker ──
+      const emojis = ["😀", "😎", "👾", "🦊", "🚀", "🦄", "👻", "🤠", "🤖", "🐱", "🐶", "🦁", "🐯", "🐼", "🐨", "🐸"];
+      const btnEmoji = document.getElementById("btn-emoji");
+      const emojiPopup = document.getElementById("emoji-popup");
+      
+      emojiPopup.innerHTML = emojis.map(e => `<button class="emoji-option" type="button">${e}</button>`).join("");
+      
+      btnEmoji.addEventListener("click", () => {
+        emojiPopup.classList.toggle("hidden");
+      });
+      
+      emojiPopup.addEventListener("click", (e) => {
+        if(e.target.classList.contains("emoji-option")) {
+          currentEmoji = e.target.textContent;
+          btnEmoji.textContent = currentEmoji;
+          emojiPopup.classList.add("hidden");
+        }
+      });
+      
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest(".emoji-picker-container")) {
+          emojiPopup.classList.add("hidden");
+        }
       });
 
+      // ── Lobby events ──
+      // Botón Entrar: usa el código escrito manualmente
       document.getElementById("btn-enter").addEventListener("click", async () => {
         const name = document.getElementById("input-name").value.trim();
         const room = document.getElementById("input-room").value.trim().toUpperCase();
 
         if (!name) { showToast("Por favor ingresa tu nombre 👤"); return; }
-        if (!room)  { showToast("Ingresa o genera un código de sala 🏠"); return; }
+        if (!room)  { showToast("Ingresa el código de sala para unirte 🏠"); return; }
 
         currentUser = name;
         currentRoom = room;
-        showGame(room, name);
+        showGame(room, name, currentEmoji);
+      });
+
+      // Botón Crear: genera código automáticamente y entra
+      document.getElementById("btn-new-room").addEventListener("click", () => {
+        const name = document.getElementById("input-name").value.trim();
+        if (!name) { showToast("Por favor ingresa tu nombre 👤"); return; }
+
+        const room = generateRoomCode();
+        document.getElementById("input-room").value = room;
+        currentUser = name;
+        currentRoom = room;
+        showGame(room, name, currentEmoji);
       });
 
       // ── Game events ──
@@ -387,16 +424,112 @@
       box-shadow: 0 0 0 3px var(--c-accent-glow);
     }
 
-    .room-row {
+    .name-input-row {
       display: flex;
       gap: 10px;
       align-items: stretch;
     }
 
-    .room-row .form-input {
-      flex: 1;
+    .emoji-picker-container {
+      position: relative;
+      display: flex;
+    }
+
+    .btn-emoji-select {
+      background: var(--c-surface2);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      padding: 0 16px;
+      font-size: 1.5rem;
+      cursor: pointer;
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-emoji-select:hover {
+      background: rgba(124,58,237,0.15);
+      border-color: var(--c-accent);
+    }
+
+    .emoji-popup {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 100;
+      backdrop-filter: blur(20px);
+    }
+
+    .emoji-popup.hidden {
+      display: none;
+    }
+
+    .emoji-option {
+      background: transparent;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 8px;
+      transition: background var(--transition), transform var(--transition);
+    }
+
+    .emoji-option:hover {
+      background: rgba(124,58,237,0.2);
+      transform: scale(1.1);
+    }
+
+    .room-code-input {
       text-transform: uppercase;
       letter-spacing: 0.15em;
+    }
+
+    .lobby-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 8px 0;
+      color: var(--c-muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .lobby-divider::before,
+    .lobby-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--c-border);
+    }
+
+    .btn-create {
+      width: 100%;
+      padding: 16px;
+      font-size: 1rem;
+      background: var(--c-surface2);
+      color: var(--c-text);
+      border: 1px solid rgba(124,58,237,0.3);
+      box-shadow: 0 4px 20px rgba(124,58,237,0.15);
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition), border-color var(--transition);
+    }
+    .btn-create:hover {
+      background: rgba(124,58,237,0.18);
+      border-color: rgba(124,58,237,0.6);
+      box-shadow: 0 6px 28px rgba(124,58,237,0.35);
+      transform: translateY(-2px);
+    }
+    .btn-create:active {
+      transform: scale(0.97);
     }
 
     .btn {
@@ -809,6 +942,10 @@
       gap: 6px;
     }
 
+    .rank-emoji {
+      font-size: 1.2rem;
+    }
+
     .you-badge {
       font-size: 0.65rem;
       font-weight: 700;
@@ -881,39 +1018,53 @@
     <p class="lobby-tagline">¿Quién reacciona más rápido? 🏆</p>
 
     <div class="lobby-card" role="main">
+      <!-- Nombre -->
       <div class="form-group">
         <label class="form-label" for="input-name">Tu nombre o apodo</label>
+        <div class="name-input-row">
+          <div class="emoji-picker-container">
+            <button id="btn-emoji" type="button" class="btn-emoji-select" aria-label="Seleccionar emoji">😀</button>
+            <div id="emoji-popup" class="emoji-popup hidden">
+              <!-- Se llena con JS -->
+            </div>
+          </div>
+          <input
+            id="input-name"
+            class="form-input"
+            type="text"
+            placeholder="Ej: Flash ⚡"
+            maxlength="24"
+            autocomplete="nickname"
+            spellcheck="false"
+          />
+        </div>
+      </div>
+
+      <!-- Código de sala (solo para unirse) -->
+      <div class="form-group">
+        <label class="form-label" for="input-room">Código de sala</label>
         <input
-          id="input-name"
-          class="form-input"
+          id="input-room"
+          class="form-input room-code-input"
           type="text"
-          placeholder="Ej: Flash ⚡"
-          maxlength="24"
-          autocomplete="nickname"
+          placeholder="XYZKW"
+          maxlength="10"
+          autocomplete="off"
           spellcheck="false"
         />
       </div>
 
-      <div class="form-group">
-        <label class="form-label" for="input-room">Código de sala</label>
-        <div class="room-row">
-          <input
-            id="input-room"
-            class="form-input"
-            type="text"
-            placeholder="XYZKW"
-            maxlength="10"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <button id="btn-new-room" class="btn btn-ghost" type="button" title="Generar código aleatorio">
-            🎲 Crear
-          </button>
-        </div>
-      </div>
-
+      <!-- Botón Entrar -->
       <button id="btn-enter" class="btn btn-enter" type="button">
         Entrar a la Sala →
+      </button>
+
+      <!-- Divisor -->
+      <div class="lobby-divider">o</div>
+
+      <!-- Botón Crear (genera código y entra automáticamente) -->
+      <button id="btn-new-room" class="btn btn-create" type="button">
+        ✨ Crear nueva sala
       </button>
     </div>
   </div>
@@ -937,7 +1088,7 @@
       </div>
 
       <div class="header-user">
-        👤 <span id="user-display">—</span>
+        <span id="user-emoji">😀</span> <span id="user-display">—</span>
       </div>
     </header>
 
