@@ -34,16 +34,19 @@
 
     import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
     import { getDatabase, ref, push, set, onValue,
-             remove, serverTimestamp, get }          from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+             remove, serverTimestamp, get, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
     // ─── Estado global ───────────────────────────────────────────────
     let app, db;
     let currentRoom   = null;
     let currentUser   = null;
+    let currentUserId = null;
     let currentEmoji  = "😀";
     let hasPressed    = false;
-    let rankingUnsub  = null;  // función para desuscribirse del listener
-    let roomStartTime = null;  // serverTimestamp del primer clic (referencia)
+    let isAdmin       = false;
+    let rankingUnsub  = null;
+    let roomStateUnsub = null;
+    let usersUnsub    = null;
 
     // ─── Init Firebase ───────────────────────────────────────────────
     function initFirebase() {
@@ -55,6 +58,10 @@
     function generateRoomCode() {
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       return Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    }
+
+    function generateId() {
+      return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     }
 
     function formatDelta(ms) {
@@ -72,17 +79,38 @@
       document.getElementById("screen-lobby").style.display = "flex";
       document.getElementById("screen-game").style.display  = "none";
       if (rankingUnsub) { rankingUnsub(); rankingUnsub = null; }
+      if (roomStateUnsub) { roomStateUnsub(); roomStateUnsub = null; }
+      if (usersUnsub) { usersUnsub(); usersUnsub = null; }
     }
 
-    function showGame(roomCode, userName, emoji) {
+    async function showGame(roomCode, userName, emoji, isCreator = false) {
       document.getElementById("screen-lobby").style.display = "none";
       document.getElementById("screen-game").style.display  = "flex";
       document.getElementById("room-code-display").textContent = roomCode;
       document.getElementById("user-display").textContent = userName;
       document.getElementById("user-emoji").textContent = emoji;
-      hasPressed   = false;
-      roomStartTime = null;
-      resetYaButton();
+      hasPressed = false;
+      
+      if (!currentUserId) currentUserId = generateId();
+
+      const roomRef = ref(db, `rooms/${roomCode}`);
+      const myUserRef = ref(db, `rooms/${roomCode}/users/${currentUserId}`);
+
+      if (isCreator) {
+        isAdmin = true;
+        onDisconnect(roomRef).remove(); // Si el admin se va, se borra la sala
+        await set(ref(db, `rooms/${roomCode}/admin`), currentUserId);
+        await set(ref(db, `rooms/${roomCode}/state`), "waiting");
+      } else {
+        isAdmin = false;
+      }
+
+      // Presencia del usuario
+      onDisconnect(myUserRef).remove();
+      await set(myUserRef, { name: userName, emoji: emoji, timestamp: serverTimestamp() });
+
+      subscribeUsers(roomCode);
+      subscribeRoomState(roomCode);
       subscribeRanking(roomCode);
     }
 
@@ -115,70 +143,178 @@
       const clicksRef = ref(db, `rooms/${currentRoom}/clicks`);
       const newClick  = push(clicksRef);
       await set(newClick, {
+        userId:    currentUserId,
         user:      currentUser,
         emoji:     currentEmoji,
         timestamp: serverTimestamp()
       });
+
+      // Ocultar botón y mostrar podio
+      document.getElementById("ya-btn-wrapper").classList.add("hidden");
+      document.getElementById("podium-area").classList.remove("hidden");
+      document.getElementById("ya-instruction").textContent = "Resultados de la ronda 🏆";
+      
+      if (isAdmin) {
+        document.getElementById("btn-reset").classList.remove("hidden");
+      }
     }
 
-    // ─── Ranking en tiempo real ───────────────────────────────────────
+    // ─── Estado de la sala ────────────────────────────────────────────
+    function subscribeRoomState(roomCode) {
+      if (roomStateUnsub) roomStateUnsub();
+      
+      const stateRef = ref(db, `rooms/${roomCode}/state`);
+      roomStateUnsub = onValue(stateRef, (snapshot) => {
+        const state = snapshot.val();
+        
+        // Si el estado es null y no eres admin, significa que la sala fue eliminada
+        if (state === null && !isAdmin && currentUser) {
+          showToast("El administrador cerró la sala.");
+          document.getElementById("btn-back").click();
+          return;
+        }
+
+        const instr = document.getElementById("ya-instruction");
+        const btnStart = document.getElementById("btn-start-round");
+        const btnYaWrap = document.getElementById("ya-btn-wrapper");
+        const countdownDisplay = document.getElementById("countdown-display");
+        const podiumArea = document.getElementById("podium-area");
+        const btnReset = document.getElementById("btn-reset");
+
+        if (state === "waiting") {
+          hasPressed = false;
+          resetYaButton();
+          btnYaWrap.classList.add("hidden");
+          countdownDisplay.classList.add("hidden");
+          podiumArea.classList.add("hidden");
+          
+          if (isAdmin) {
+            instr.textContent = "Cuando todos estén listos, presiona Empezar.";
+            btnStart.classList.remove("hidden");
+            btnReset.classList.add("hidden");
+          } else {
+            instr.textContent = "Esperando al administrador...";
+            btnStart.classList.add("hidden");
+            btnReset.classList.add("hidden");
+          }
+        } else if (state === "countdown") {
+          instr.textContent = "¡Prepárate!";
+          btnStart.classList.add("hidden");
+          btnReset.classList.add("hidden");
+          btnYaWrap.classList.add("hidden");
+          podiumArea.classList.add("hidden");
+          countdownDisplay.classList.remove("hidden");
+          
+          let count = 3;
+          countdownDisplay.textContent = count;
+          
+          // Re-iniciar animación (hack para CSS)
+          countdownDisplay.style.animation = 'none';
+          countdownDisplay.offsetHeight; 
+          countdownDisplay.style.animation = null;
+
+          const interval = setInterval(() => {
+            count--;
+            if (count > 0) {
+              countdownDisplay.textContent = count;
+              countdownDisplay.style.animation = 'none';
+              countdownDisplay.offsetHeight;
+              countdownDisplay.style.animation = null;
+            } else {
+              clearInterval(interval);
+              countdownDisplay.classList.add("hidden");
+              btnYaWrap.classList.remove("hidden");
+              instr.textContent = "¡Presiona YA!";
+            }
+          }, 1000);
+        }
+      });
+    }
+
+    // ─── Usuarios conectados ──────────────────────────────────────────
+    function subscribeUsers(roomCode) {
+      if (usersUnsub) usersUnsub();
+      
+      const usersRef = ref(db, `rooms/${roomCode}/users`);
+      usersUnsub = onValue(usersRef, (snapshot) => {
+        const data = snapshot.val();
+        const container = document.getElementById("users-list");
+        const countEl = document.getElementById("users-count");
+        
+        if (!data) {
+          countEl.textContent = "0";
+          container.innerHTML = `<div class="ranking-empty"><p>Nadie conectado</p></div>`;
+          return;
+        }
+
+        const users = Object.entries(data);
+        countEl.textContent = users.length;
+        
+        container.innerHTML = users.map(([userId, info]) => {
+          const isMe = userId === currentUserId;
+          return `
+            <div class="user-row ${isMe ? "me" : ""}">
+              <span class="u-emoji">${escapeHtml(info.emoji || "😀")}</span>
+              <span class="u-name">${escapeHtml(info.name)}${isMe ? " <span class='you-badge'>tú</span>" : ""}</span>
+            </div>`;
+        }).join("");
+      });
+    }
+
+    // ─── Ranking en tiempo real (Podio) ───────────────────────────────
     function subscribeRanking(roomCode) {
       if (rankingUnsub) rankingUnsub();
 
       const clicksRef = ref(db, `rooms/${roomCode}/clicks`);
       rankingUnsub = onValue(clicksRef, (snapshot) => {
         const data = snapshot.val();
-        const container = document.getElementById("ranking-list");
+        const container = document.getElementById("podium-container");
 
         if (!data) {
-          container.innerHTML = `
-            <div class="ranking-empty">
-              <span class="ranking-empty-icon">⏳</span>
-              <p>Esperando participantes…</p>
-            </div>`;
+          container.innerHTML = "";
           return;
         }
 
-        // Convertir a array y ordenar por timestamp
         const entries = Object.values(data)
           .filter(e => e.timestamp !== null)
           .sort((a, b) => a.timestamp - b.timestamp);
 
         if (entries.length === 0) {
-          container.innerHTML = `
-            <div class="ranking-empty">
-              <span class="ranking-empty-icon">⏳</span>
-              <p>Esperando participantes…</p>
-            </div>`;
+          container.innerHTML = "";
           return;
         }
 
         const firstTs = entries[0].timestamp;
-
-        container.innerHTML = entries.map((entry, i) => {
+        const top3 = entries.slice(0, 3);
+        
+        let html = "";
+        top3.forEach((entry, i) => {
+          const pos = i + 1;
           const delta = entry.timestamp - firstTs;
-          const isMe  = entry.user === currentUser;
-          return `
-            <div class="ranking-row ${isMe ? "ranking-row--me" : ""}" style="animation-delay:${i * 60}ms">
-              <span class="rank-medal">${medal(i)}</span>
-              <span class="rank-name"><span class="rank-emoji">${escapeHtml(entry.emoji || "😀")}</span> ${escapeHtml(entry.user)}${isMe ? " <span class='you-badge'>tú</span>" : ""}</span>
-              <span class="rank-time">${formatDelta(delta)}</span>
-            </div>`;
-        }).join("");
+          html += `
+            <div class="podium-place pos-${pos}">
+              <div class="podium-avatar">${escapeHtml(entry.emoji || "😀")}</div>
+              <div class="podium-name">${escapeHtml(entry.user)}</div>
+              <div class="podium-time">${formatDelta(delta)}</div>
+              <div class="podium-step">${pos}</div>
+            </div>
+          `;
+        });
+        
+        container.innerHTML = html;
       });
     }
 
     // ─── Reiniciar sala ───────────────────────────────────────────────
     async function resetRoom() {
-      if (!currentRoom) return;
+      if (!currentRoom || !isAdmin) return;
       const clicksRef = ref(db, `rooms/${currentRoom}/clicks`);
       await remove(clicksRef);
-      hasPressed    = false;
-      roomStartTime = null;
-      resetYaButton();
-
-      // Feedback visual
-      showToast("¡Sala reiniciada! Nueva ronda 🚀");
+      
+      const stateRef = ref(db, `rooms/${currentRoom}/state`);
+      await set(stateRef, "waiting");
+      
+      showToast("¡Sala reiniciada! 🚀");
     }
 
     // ─── Toast notification ───────────────────────────────────────────
@@ -248,10 +384,10 @@
 
         currentUser = name;
         currentRoom = room;
-        showGame(room, name, currentEmoji);
+        showGame(room, name, currentEmoji, false);
       });
 
-      // Botón Crear: genera código automáticamente y entra
+      // Botón Crear: genera código automáticamente y entra como admin
       document.getElementById("btn-new-room").addEventListener("click", () => {
         const name = document.getElementById("input-name").value.trim();
         if (!name) { showToast("Por favor ingresa tu nombre 👤"); return; }
@@ -260,16 +396,29 @@
         document.getElementById("input-room").value = room;
         currentUser = name;
         currentRoom = room;
-        showGame(room, name, currentEmoji);
+        showGame(room, name, currentEmoji, true);
       });
 
       // ── Game events ──
+      document.getElementById("btn-start-round").addEventListener("click", async () => {
+        if (!isAdmin || !currentRoom) return;
+        const stateRef = ref(db, `rooms/${currentRoom}/state`);
+        await set(stateRef, "countdown");
+      });
+
       document.getElementById("ya-btn").addEventListener("click", registerClick);
       document.getElementById("btn-reset").addEventListener("click", resetRoom);
-      document.getElementById("btn-back").addEventListener("click", () => {
-        if (rankingUnsub) { rankingUnsub(); rankingUnsub = null; }
+      document.getElementById("btn-back").addEventListener("click", async () => {
+        if (currentUserId && currentRoom) {
+          if (isAdmin) {
+            await remove(ref(db, `rooms/${currentRoom}`));
+          } else {
+            await remove(ref(db, `rooms/${currentRoom}/users/${currentUserId}`));
+          }
+        }
         currentRoom  = null;
         currentUser  = null;
+        currentUserId = null;
         showLobby();
       });
       document.getElementById("room-code-display").addEventListener("click", copyRoomCode);
@@ -824,26 +973,141 @@
       color: var(--c-text);
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     /* ══════════════════════════════════════════
-       RANKING PANEL
+       PODIUM & NEW UI
     ══════════════════════════════════════════ */
-    .ranking-panel {
+    .countdown-display {
+      font-size: clamp(8rem, 20vw, 15rem);
+      font-weight: 900;
+      color: var(--c-ya);
+      text-shadow: 0 10px 40px rgba(245,158,11,0.5);
+      animation: pop-in 1s cubic-bezier(0.175, 0.885, 0.32, 1.275) infinite;
+      user-select: none;
+    }
+    @keyframes pop-in {
+      0% { transform: scale(0.5); opacity: 0; }
+      20% { transform: scale(1.1); opacity: 1; }
+      80% { transform: scale(1); opacity: 1; }
+      100% { transform: scale(1.5); opacity: 0; }
+    }
+
+    .podium-area {
+      width: 100%;
+      max-width: 600px;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-end;
+      min-height: 300px;
+      animation: slide-up 0.5s ease-out forwards;
+    }
+
+    .podium-container {
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 16px;
+      width: 100%;
+    }
+
+    .podium-place {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      max-width: 120px;
+    }
+
+    .podium-avatar {
+      font-size: 2.5rem;
+      background: var(--c-surface2);
+      border: 2px solid var(--c-border);
+      border-radius: 50%;
+      width: 70px;
+      height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      position: relative;
+      z-index: 2;
+    }
+
+    .podium-name {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--c-text);
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .podium-time {
+      font-size: 0.75rem;
+      color: var(--c-muted);
+      font-weight: 700;
+    }
+
+    .podium-step {
+      width: 100%;
+      background: linear-gradient(180deg, var(--c-surface2) 0%, var(--c-surface) 100%);
+      border: 1px solid var(--c-border);
+      border-bottom: none;
+      border-radius: 12px 12px 0 0;
+      display: flex;
+      justify-content: center;
+      padding-top: 12px;
+      font-size: 2rem;
+      font-weight: 900;
+      color: rgba(255,255,255,0.2);
+      box-shadow: inset 0 2px 10px rgba(255,255,255,0.05);
+    }
+
+    .podium-place.pos-1 .podium-step { height: 160px; border-color: rgba(251,191,36,0.4); background: linear-gradient(180deg, rgba(251,191,36,0.15) 0%, var(--c-surface) 100%); }
+    .podium-place.pos-2 .podium-step { height: 110px; border-color: rgba(148,163,184,0.4); background: linear-gradient(180deg, rgba(148,163,184,0.1) 0%, var(--c-surface) 100%); }
+    .podium-place.pos-3 .podium-step { height: 70px;  border-color: rgba(217,119,6,0.4); background: linear-gradient(180deg, rgba(217,119,6,0.15) 0%, var(--c-surface) 100%); }
+    
+    .podium-place.pos-1 .podium-avatar { border-color: var(--c-gold); box-shadow: 0 0 30px rgba(251,191,36,0.3); }
+    .podium-place.pos-2 .podium-avatar { border-color: var(--c-silver); }
+    .podium-place.pos-3 .podium-avatar { border-color: var(--c-bronze); }
+    
+    .podium-place.pos-2 { order: 1; }
+    .podium-place.pos-1 { order: 2; z-index: 10; margin: 0 -10px; }
+    .podium-place.pos-3 { order: 3; }
+
+    @keyframes slide-up {
+      from { transform: translateY(40px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* ══════════════════════════════════════════
+       RIGHT PANEL (USERS)
+    ══════════════════════════════════════════ */
+    .right-panel {
       background: var(--c-surface);
       border-left: 1px solid var(--c-border);
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      height: calc(100vh - 70px);
+      position: sticky;
+      top: 70px;
     }
 
-    @media (max-width: 768px) {
-      .ranking-panel {
-        border-left: none;
-        border-top: 1px solid var(--c-border);
-        max-height: 45vh;
-      }
+    .right-panel-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
-    .ranking-header {
+    .panel-header {
       padding: 20px 24px 14px;
       border-bottom: 1px solid var(--c-border);
       display: flex;
@@ -851,7 +1115,7 @@
       gap: 10px;
     }
 
-    .ranking-title {
+    .panel-title {
       font-size: 0.8rem;
       font-weight: 700;
       text-transform: uppercase;
@@ -859,93 +1123,38 @@
       color: var(--c-muted);
     }
 
-    .ranking-dot {
-      width: 8px; height: 8px;
-      background: #22c55e;
-      border-radius: 50%;
-      box-shadow: 0 0 8px #22c55e;
-      animation: blink 1.4s ease-in-out infinite;
-      margin-left: auto;
-    }
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
+    .panel-footer {
+      padding: 16px;
+      border-top: 1px solid var(--c-border);
+      background: rgba(0,0,0,0.2);
     }
 
-    .ranking-list {
+    .users-list {
       flex: 1;
       overflow-y: auto;
-      padding: 16px 16px;
+      padding: 16px;
       display: flex;
       flex-direction: column;
       gap: 8px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--c-surface2) transparent;
     }
-
-    .ranking-list::-webkit-scrollbar { width: 4px; }
-    .ranking-list::-webkit-scrollbar-track { background: transparent; }
-    .ranking-list::-webkit-scrollbar-thumb { background: var(--c-surface2); border-radius: 4px; }
-
-    .ranking-empty {
+    
+    .user-row {
       display: flex;
-      flex-direction: column;
       align-items: center;
       gap: 12px;
-      padding: 40px 16px;
-      color: var(--c-muted);
-      font-size: 0.9rem;
-      text-align: center;
-    }
-    .ranking-empty-icon { font-size: 2.5rem; }
-
-    .ranking-row {
-      display: grid;
-      grid-template-columns: 36px 1fr auto;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 14px;
+      padding: 10px 14px;
       background: var(--c-surface2);
-      border: 1px solid var(--c-border);
+      border: 1px solid transparent;
       border-radius: 12px;
-      font-size: 0.9rem;
-      animation: slide-in 0.3s ease-out both;
-      transition: border-color var(--transition), background var(--transition);
+      font-size: 0.95rem;
     }
-
-    @keyframes slide-in {
-      from { opacity: 0; transform: translateX(20px); }
-      to   { opacity: 1; transform: translateX(0); }
-    }
-
-    .ranking-row--me {
+    .user-row.me {
       border-color: rgba(124,58,237,0.5);
       background: rgba(124,58,237,0.1);
-      box-shadow: 0 0 0 1px rgba(124,58,237,0.2);
     }
-
-    .ranking-row:first-child {
-      border-color: rgba(251,191,36,0.4);
-      background: rgba(251,191,36,0.08);
-    }
-
-    .rank-medal { font-size: 1.2rem; text-align: center; }
-
-    .rank-name {
-      font-weight: 600;
-      color: var(--c-text);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .rank-emoji {
-      font-size: 1.2rem;
-    }
-
+    .user-row .u-emoji { font-size: 1.3rem; }
+    .user-row .u-name { font-weight: 600; color: var(--c-text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    
     .you-badge {
       font-size: 0.65rem;
       font-weight: 700;
@@ -1092,41 +1301,62 @@
       </div>
     </header>
 
-    <!-- Main layout: button + ranking -->
+    <!-- Main layout: center area + right panel -->
     <div class="game-main">
 
-      <!-- YA! button area -->
+      <!-- Center area -->
       <section class="ya-area">
-        <p class="ya-instruction">Presiona el botón en cuanto estés listo.<br>¡El más rápido gana! ⚡</p>
+        <p id="ya-instruction" class="ya-instruction">Esperando al administrador...</p>
 
-        <div class="ya-btn-wrapper">
+        <!-- Botón de admin para empezar -->
+        <button id="btn-start-round" class="btn btn-accent hidden" type="button" style="margin-top: 20px; font-size: 1.2rem; padding: 16px 32px;">
+          ▶ Empezar Ronda
+        </button>
+
+        <!-- Countdown -->
+        <div id="countdown-display" class="countdown-display hidden">3</div>
+
+        <!-- THE BIG BUTTON -->
+        <div id="ya-btn-wrapper" class="ya-btn-wrapper hidden">
           <div id="ya-ripple"></div>
           <button id="ya-btn" type="button" aria-label="Presionar Ya">
             <span class="ya-label">¡YA!</span>
           </button>
         </div>
 
+        <!-- PODIUM -->
+        <div id="podium-area" class="podium-area hidden">
+           <div class="podium-container" id="podium-container">
+             <!-- Se llena con JS -->
+           </div>
+        </div>
+
         <div class="btn-reset-wrap">
-          <button id="btn-reset" class="btn btn-reset" type="button">
+          <button id="btn-reset" class="btn btn-reset hidden" type="button">
             🔄 Reiniciar Sala
-          </button>
-          <button id="btn-back" class="btn btn-back-sm" type="button">
-            ← Salir
           </button>
         </div>
       </section>
 
-      <!-- Ranking panel -->
-      <aside class="ranking-panel" aria-label="Ranking de velocidad">
-        <div class="ranking-header">
-          <h2 class="ranking-title">Ranking de velocidad</h2>
-          <div class="ranking-dot" title="En vivo"></div>
-        </div>
-        <div id="ranking-list" class="ranking-list">
-          <div class="ranking-empty">
-            <span class="ranking-empty-icon">⏳</span>
-            <p>Esperando participantes…</p>
+      <!-- Users panel (right) -->
+      <aside class="right-panel" aria-label="Usuarios conectados">
+        <div class="right-panel-content">
+          <div class="panel-header">
+            <h2 class="panel-title">Jugadores (<span id="users-count">0</span>)</h2>
+            <div class="ranking-dot" title="En vivo"></div>
           </div>
+          <div id="users-list" class="users-list">
+            <div class="ranking-empty">
+              <span class="ranking-empty-icon">⏳</span>
+              <p>Esperando participantes…</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="panel-footer">
+          <button id="btn-back" class="btn btn-back-sm" type="button" style="width: 100%;">
+            ← Salir de la sala
+          </button>
         </div>
       </aside>
 
