@@ -359,10 +359,27 @@
         .replace(/"/g, "&quot;");
     }
 
-    // ─── Copiar código de sala ────────────────────────────────────────
-    async function copyRoomCode() {
+    // ─── Invitar: QR + enlace de sala ─────────────────────────────────
+    function roomLink() {
+      return `${window.location.origin}${window.location.pathname}?room=${currentRoom}`;
+    }
+
+    function showShareDialog() {
+      const qr = document.getElementById("qr");
+      qr.innerHTML = "";
+      new QRCode(qr, { text: roomLink(), width: 400, height: 400 });
+      document.getElementById("share-room").textContent = currentRoom;
+      document.getElementById("share-dialog").showModal();
+    }
+
+    async function sendRoomLink() {
+      const link = roomLink();
+      if (navigator.share) {
+        try { await navigator.share({ title: "Ya! — Únete a mi sala", url: link }); } catch {}
+        return;
+      }
+      document.getElementById("share-dialog").close();
       try {
-        const link = `${window.location.origin}${window.location.pathname}?room=${currentRoom}`;
         await navigator.clipboard.writeText(link);
         showToast("Enlace de invitación copiado 📋");
       } catch {
@@ -462,7 +479,8 @@
         
         showLobby();
       });
-      document.getElementById("room-code-btn").addEventListener("click", copyRoomCode);
+      document.getElementById("room-code-btn").addEventListener("click", showShareDialog);
+      document.getElementById("send-link").addEventListener("click", sendRoomLink);
 
       // Accesibilidad: Enter en los campos
       document.getElementById("input-name").addEventListener("keydown", e => {
@@ -1253,6 +1271,41 @@
     }
 
     /* ══════════════════════════════════════════
+       VOLVER A JUEGOS
+    ══════════════════════════════════════════ */
+    .btn-games {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      padding: 10px 14px;
+      text-decoration: none;
+    }
+
+    /* ══════════════════════════════════════════
+       MODAL COMPARTIR (QR)
+    ══════════════════════════════════════════ */
+    .share-dialog {
+      width: min(320px, 100% - 32px);
+      margin: auto;
+      padding: 24px;
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius-lg);
+      background: var(--c-surface);
+      color: var(--c-text);
+      text-align: center;
+      font-family: inherit;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 40px var(--c-accent-glow);
+    }
+    .share-dialog::backdrop { background: rgba(13,13,20,0.8); backdrop-filter: blur(4px); }
+    .share-dialog h2 { font-size: 1.5rem; font-weight: 900; }
+    .share-dialog p { font-size: 0.85rem; color: var(--c-muted); margin: 4px 0 16px; }
+    .share-dialog p b { color: var(--c-accent2); letter-spacing: 0.12em; }
+    #qr { display: inline-block; padding: 10px; background: #fff; border-radius: 12px; }
+    #qr img, #qr canvas { display: block; width: 200px; height: 200px; }
+    .share-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .share-actions .btn { flex: 1; padding: 12px; }
+
+    /* ══════════════════════════════════════════
        RESPONSIVE TWEAKS
     ══════════════════════════════════════════ */
     @media (max-width: 480px) {
@@ -1268,6 +1321,7 @@
   <!-- ║          PANTALLA DE ENTRADA         ║ -->
   <!-- ╚══════════════════════════════════════╝ -->
   <div id="screen-lobby" class="screen">
+    <a class="btn btn-ghost btn-games" href="index.html">← Juegos</a>
     <h1 class="lobby-logo">Ya!</h1>
     <p class="lobby-tagline">¿Quién reacciona más rápido? 🏆</p>
 
@@ -1333,7 +1387,7 @@
       <div class="header-logo" aria-label="Ya!">Ya!</div>
 
       <button class="header-room" id="room-code-btn" type="button"
-           aria-label="Copiar enlace de invitación" title="Clic para copiar enlace" style="justify-content: center; font-size: 0.95rem;">
+           aria-label="Invitar con QR o enlace" title="Invitar con QR o enlace" style="justify-content: center; font-size: 0.95rem;">
         <span style="font-size: 1rem; color: var(--c-accent2);">🔗</span>
         <span style="font-weight: 700; color: var(--c-accent2); letter-spacing: 0.05em;">Invitar</span>
       </button>
@@ -1411,6 +1465,19 @@
 
   <!-- Toast notification -->
   <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Modal de invitación (QR + enlace) -->
+  <dialog id="share-dialog" class="share-dialog">
+    <h2>Invita a jugar</h2>
+    <p>Escanea para unirte a la sala <b id="share-room"></b></p>
+    <div id="qr"></div>
+    <div class="share-actions">
+      <button id="send-link" class="btn btn-accent" type="button">Enviar enlace</button>
+      <button class="btn btn-ghost" type="button" onclick="this.closest('dialog').close()">Cerrar</button>
+    </div>
+  </dialog>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 </body>
 </html>
