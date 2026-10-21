@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clue — Bloc de Hojas de Pistas</title>
+  <meta name="description" content="Hoja de pistas virtual para Clue: marca tus investigaciones sin papel." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --c-bg:       #1a0f0c;
+      --c-paper:    #e9dcbc;
+      --c-paper2:   #f3ead3;
+      --c-line:     #b9a679;
+      --c-brick:    #8c2b1d;
+      --c-cream:    #f6e7b0;
+      --c-ink:      #2a1d14;
+      --c-yes:      #2e7d32;
+      --c-maybe:    #b7791f;
+      font-family: "Outfit", system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100dvh;
+      padding: 16px;
+      color: var(--c-ink);
+      background-color: var(--c-bg);
+      /* Plano de la mansión: cuadrícula del tablero + viñeta */
+      background-image:
+        radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.75) 100%),
+        linear-gradient(rgba(246,231,176,0.06) 2px, transparent 2px),
+        linear-gradient(90deg, rgba(246,231,176,0.06) 2px, transparent 2px),
+        linear-gradient(rgba(246,231,176,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(246,231,176,0.03) 1px, transparent 1px),
+        linear-gradient(135deg, #3a1410 0%, #1a0f0c 60%);
+      background-size: 100% 100%, 160px 160px, 160px 160px, 32px 32px, 32px 32px, 100% 100%;
+      background-attachment: fixed;
+    }
+    .wrap { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+    .btn {
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--c-cream);
+      background: rgba(0,0,0,0.35);
+      border: 1px solid rgba(246,231,176,0.25);
+      border-radius: 8px;
+      padding: 10px 14px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .toolbar { display: flex; gap: 8px; }
+    .toolbar .btn:first-child { margin-right: auto; }
+
+    dialog {
+      width: min(320px, 100% - 32px);
+      margin: auto;
+      border: none;
+      border-radius: 8px;
+      padding: 20px;
+      background: var(--c-paper2);
+      color: var(--c-ink);
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.7); }
+    dialog h2 { font-family: "Bangers", cursive; font-weight: 400; font-size: 1.8rem; letter-spacing: 0.04em; }
+    dialog p { font-size: 0.85rem; opacity: 0.8; margin: 4px 0 14px; }
+    #qr { display: inline-block; padding: 10px; background: #fff; border-radius: 6px; }
+    #qr img, #qr canvas { display: block; width: 200px; height: 200px; }
+    dialog .actions { display: flex; gap: 8px; margin-top: 14px; }
+    dialog .btn { flex: 1; color: var(--c-paper2); background: var(--c-brick); border: none; }
+    dialog .btn.ghost { color: var(--c-ink); background: transparent; border: 1px solid var(--c-line); }
+
+    .sheet {
+      background: linear-gradient(180deg, var(--c-paper2), var(--c-paper));
+      border-radius: 6px;
+      padding: 14px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6), inset 0 0 40px rgba(140,100,40,0.25);
+    }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-icon {
+      display: grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 3px solid var(--c-ink);
+      font-size: 1.8rem;
+      background: var(--c-paper2);
+    }
+    .logo h1 { font-family: "Bangers", cursive; font-size: 3.4rem; line-height: 1; letter-spacing: 0.04em; }
+    .logo p { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+    .legend { font-size: 0.8rem; margin: 10px 0; opacity: 0.8; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: var(--c-brick);
+      color: var(--c-cream);
+      font-family: "Bangers", cursive;
+      font-style: italic;
+      font-weight: 400;
+      font-size: 1.4rem;
+      letter-spacing: 0.06em;
+      text-align: left;
+      padding: 4px 10px;
+    }
+    tr:not(:first-child) th { border-top: 10px solid transparent; background-clip: padding-box; }
+    td { border: 1px solid var(--c-line); height: 44px; }
+    .name {
+      padding: 0 8px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+    .name > span { display: inline-flex; align-items: center; gap: 10px; }
+    .icon {
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 1.2rem;
+      /* Centro blanco neutro para que el emoji contraste; el color queda como marco */
+      background: radial-gradient(circle closest-side, #fff 0 78%, var(--color, #cbb88a) 82%);
+      border: 1px solid rgba(0,0,0,0.3);
+    }
+    .name.out { opacity: 0.45; }
+    .name.out .label { text-decoration: line-through 2px var(--c-brick); }
+    .cell {
+      width: 64px;
+      background: var(--c-paper2);
+      text-align: center;
+      font-size: 1.5rem;
+      font-weight: 800;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .cell[data-v="✗"] { color: var(--c-brick); }
+    .cell[data-v="✓"] { color: var(--c-yes); background: #dcebc8; }
+    .cell[data-v="?"] { color: var(--c-maybe); }
+    footer { text-align: center; color: var(--c-cream); opacity: 0.6; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="toolbar">
+      <a class="btn" href="index.html">← Juegos</a>
+      <button id="share" class="btn">📲 Compartir</button>
+      <button id="reset" class="btn">↺ Reiniciar</button>
+    </nav>
+    <div class="sheet">
+      <div class="logo">
+        <span class="logo-icon">🔍</span>
+        <div>
+          <h1>CLUE</h1>
+          <p>Bloc de Hojas de Pistas</p>
+        </div>
+      </div>
+      <p class="legend">Toca la casilla: <b>✗</b> no es · <b>✓</b> es · <b>?</b> sospecha. Toca el nombre para tacharlo.</p>
+      <table id="card"></table>
+    </div>
+    <footer>Se guarda en este dispositivo.</footer>
+  </div>
+
+  <dialog id="share-dialog">
+    <h2>Invita a jugar</h2>
+    <p>Escanea el QR para abrir tu propia hoja de pistas.</p>
+    <div id="qr"></div>
+    <div class="actions">
+      <button id="send-link" class="btn">Enviar enlace</button>
+      <button class="btn ghost" onclick="this.closest('dialog').close()">Cerrar</button>
+    </div>
+  </dialog>
+
+  <dialog id="reset-dialog">
+    <h2>¿Nueva partida?</h2>
+    <p>Se borrarán todas tus marcas.</p>
+    <form method="dialog" class="actions">
+      <button value="ok" class="btn">Borrar todo</button>
+      <button value="" class="btn ghost">Cancelar</button>
+    </form>
+  </dialog>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script>
+    // [nombre, ícono, color de ficha]
+    const SECTIONS = {
+      '🕵️ Sospechosos': [
+        ['Coronel Mostaza', '👤', '#e0a800'],
+        ['Profesor Moradillo', '👤', '#8e4fb5'],
+        ['Sr. Verdi', '👤', '#3d9142'],
+        ['Sra. Azulino', '👤', '#2f6fc0'],
+        ['Srita. Escarlata', '👤', '#d23b3b'],
+        ['Sra. Blanco', '👤', '#d4d4d4'],
+      ],
+      '🗡️ Armas': [
+        ['Cuchillo', '🔪'],
+        ['Candelabro', '🕯️'],
+        ['Pistola', '🔫'],
+        ['Veneno', '🧪'],
+        ['Cuerda', '🪢'],
+        ['Pesas', '🏋️'],
+      ],
+      '🏠 Habitaciones': [
+        ['Vestíbulo', '🚪'],
+        ['Comedor', '🍽️'],
+        ['Cocina', '🍳'],
+        ['Patio', '🌳'],
+        ['Observatorio', '🔭'],
+        ['Teatro', '🎭'],
+        ['Sala', '🛋️'],
+        ['Spa', '🧖'],
+        ['Habitación de Huéspedes', '🛏️'],
+      ],
+    };
+    const CYCLE = ['', '✗', '✓', '?'];
+    const KEY = 'clue-card';
+
+    let state = {};
+    try { state = JSON.parse(localStorage.getItem(KEY)) || {}; } catch {}
+    const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+
+    const card = document.getElementById('card');
+    for (const [section, items] of Object.entries(SECTIONS)) {
+      card.insertAdjacentHTML('beforeend', `<tr><th colspan="2">${section}</th></tr>`);
+      for (const [item, icon, color] of items) {
+        const tr = card.insertRow();
+        const name = tr.insertCell();
+        name.className = 'name' + (state[item] ? ' out' : '');
+        name.innerHTML = `<span><span class="icon"${color ? ` style="--color:${color}"` : ''}>${icon}</span><span class="label">${item}</span></span>`;
+        name.onclick = () => { state[item] = !state[item]; name.classList.toggle('out'); save(); };
+        const id = `${item}#`;
+        const td = tr.insertCell();
+        td.className = 'cell';
+        td.textContent = td.dataset.v = state[id] || '';
+        td.onclick = () => {
+          state[id] = CYCLE[(CYCLE.indexOf(td.dataset.v) + 1) % CYCLE.length];
+          td.textContent = td.dataset.v = state[id];
+          save();
+        };
+      }
+    }
+
+    const resetDialog = document.getElementById('reset-dialog');
+    document.getElementById('reset').onclick = () => { resetDialog.returnValue = ''; resetDialog.showModal(); };
+    resetDialog.onclose = () => {
+      if (resetDialog.returnValue !== 'ok') return;
+      state = {};
+      save();
+      location.reload();
+    };
+
+    // Compartir: QR + enlace a la hoja vacía (las marcas de cada jugador son secretas)
+    const link = location.origin + location.pathname;
+    const shareDialog = document.getElementById('share-dialog');
+    const sendBtn = document.getElementById('send-link');
+    new QRCode(document.getElementById('qr'), { text: link, width: 400, height: 400 });
+
+    document.getElementById('share').onclick = () => shareDialog.showModal();
+    sendBtn.onclick = async () => {
+      if (navigator.share) {
+        try { await navigator.share({ title: 'Clue — Hoja de pistas', url: link }); } catch {}
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(link);
+        sendBtn.textContent = '¡Enlace copiado! 📋';
+      } catch {
+        sendBtn.textContent = link;
+      }
+    };
+  </script>
+</body>
+</html>

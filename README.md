@@ -27,7 +27,7 @@ El mayor reto del juego es **evitar la trampa del reloj**: si se usara `Date.now
 ## Arquitectura
 
 ```
-index.html (único archivo)
+ya.html (único archivo)
 │
 ├── <style>          → Todo el CSS (variables, animaciones, responsive)
 ├── <script type="module">
