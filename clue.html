@@ -17,8 +17,6 @@
       --c-brick:    #8c2b1d;
       --c-cream:    #f6e7b0;
       --c-ink:      #2a1d14;
-      --c-yes:      #2e7d32;
-      --c-maybe:    #b7791f;
       --dice-accent: var(--c-brick);
       --dice-face:   var(--c-paper2);
       --dice-pip:    var(--c-ink);
@@ -108,21 +106,7 @@
     }
     .logo h1 { font-family: "Bangers", cursive; font-size: 3.4rem; line-height: 1; letter-spacing: 0.04em; }
     .logo p { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
-    .legend { display: flex; gap: 6px; margin-top: 12px; }
-    .legend span {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 8px;
-      border: 1px solid var(--c-line);
-      border-radius: 6px;
-      background: var(--c-paper2);
-      font-size: 0.85rem;
-      font-weight: 600;
-    }
-    .legend b { font-size: 1.2rem; font-weight: 800; }
-    .hint { font-size: 0.75rem; opacity: 0.7; margin: 6px 0 10px; }
+    .hint { font-size: 0.75rem; opacity: 0.7; margin: 12px 0 10px; }
 
     table { width: 100%; border-collapse: collapse; }
     th {
@@ -165,8 +149,6 @@
       -webkit-tap-highlight-color: transparent;
     }
     .cell[data-v="✗"] { color: var(--c-brick); }
-    .cell[data-v="✓"] { color: var(--c-yes); background: #dcebc8; }
-    .cell[data-v="?"] { color: var(--c-maybe); }
     footer { text-align: center; color: var(--c-cream); opacity: 0.6; font-size: 0.75rem; }
   </style>
 </head>
@@ -185,12 +167,7 @@
           <p>Bloc de Hojas de Pistas</p>
         </div>
       </div>
-      <div class="legend">
-        <span><b style="color: var(--c-brick)">✗</b> No fue</span>
-        <span><b style="color: var(--c-yes)">✓</b> ¡Fue!</span>
-        <span><b style="color: var(--c-maybe)">?</b> Tal vez</span>
-      </div>
-      <p class="hint">Toca la casilla para cambiar la marca.</p>
+      <p class="hint">Toca la casilla para marcar con ✗ lo que no fue.</p>
       <table id="card"></table>
     </div>
     <footer>Se guarda en este dispositivo.</footer>
@@ -224,7 +201,6 @@
       'Armas': ['Cuchillo', 'Candelabro', 'Pistola', 'Veneno', 'Cuerda', 'Pesas'],
       'Habitaciones': ['Vestíbulo', 'Comedor', 'Cocina', 'Patio', 'Observatorio', 'Teatro', 'Sala', 'Spa', 'Habitación de Huéspedes'],
     };
-    const CYCLE = ['', '✗', '✓', '?'];
     const KEY = 'clue-card';
 
     let state = {};
@@ -244,9 +220,9 @@
         const id = `${item}#`;
         const td = tr.insertCell();
         td.className = 'cell';
-        td.textContent = td.dataset.v = state[id] || '';
+        td.textContent = td.dataset.v = state[id] === '✗' ? '✗' : ''; // ignora marcas viejas ✓/?
         td.onclick = () => {
-          state[id] = CYCLE[(CYCLE.indexOf(td.dataset.v) + 1) % CYCLE.length];
+          state[id] = td.dataset.v ? '' : '✗';
           td.textContent = td.dataset.v = state[id];
           save();
         };
