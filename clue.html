@@ -19,12 +19,16 @@
       --c-ink:      #2a1d14;
       --c-yes:      #2e7d32;
       --c-maybe:    #b7791f;
+      --dice-accent: var(--c-brick);
+      --dice-face:   var(--c-paper2);
+      --dice-pip:    var(--c-ink);
+      --dice-text:   var(--c-cream);
       font-family: "Outfit", system-ui, sans-serif;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       min-height: 100dvh;
-      padding: 16px;
+      padding: 16px 16px 96px; /* espacio para el botón del dado */
       color: var(--c-ink);
       background-color: var(--c-bg);
       /* Plano de la mansión: cuadrícula del tablero + viñeta */
@@ -278,5 +282,6 @@
       }
     };
   </script>
+  <script src="dice.js"></script>
 </body>
 </html>
